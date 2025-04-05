@@ -269,7 +269,7 @@ def main():
     history = model.fit(
         X_train_cnn, y_train,
         batch_size=128,  # Improved batch size (original was 64)
-        epochs=400,      # More epochs (original was 100)
+        epochs=50,      # More epochs (original was 100)
         validation_data=(X_test_cnn, y_test),
         callbacks=[early_stopping, model_checkpoint, reduce_lr],
         verbose=1
@@ -331,7 +331,7 @@ def main():
         fold_model.fit(
             X_train_fold, y_train_fold,
             batch_size=128,
-            epochs=50,  # Reduced epochs for cross-validation
+            epochs=100,  # Reduced epochs for cross-validation
             verbose=0
         )
         
