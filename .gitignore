@@ -21,9 +21,32 @@ var/
 *.egg
 
 # Data files
-X.npy
-y.npy
+*.npy
+*.npz
+X_*.npy
+y_*.npy
 data/
+data/*
+*/data/
+*/data/*
+uploads/
+logs/
+
+# Model files
+*.h5
+*.hdf5
+*.pkl
+*.model
+best_*
+saved_models/
+checkpoints/
+
+# Audio files
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.aac
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -54,3 +77,10 @@ static/uploads/*.mp3
 
 # Except keep the uploads directory
 !static/uploads/.gitkeep
+
+# TensorFlow logs and checkpoints
+logs/
+tb_logs/
+**/logs/
+**/tb_logs/
+tensorboard/
