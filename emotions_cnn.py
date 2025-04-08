@@ -338,61 +338,84 @@ def load_data(save=False, augment=True, max_files_per_emotion=None):
         
     return np.array(x), np.array(y)
 
-def create_model(input_shape, num_classes):
+def squeeze_excitation_block(input_tensor, ratio=8):
     """
-    Create an improved CNN model with better regularization and modern techniques
+    Squeeze and Excitation block for channel-wise attention
     """
-    model = Sequential([
-        # Input layer
-        Conv1D(64, 3, padding='same', input_shape=input_shape),
-        layers.BatchNormalization(),
-        Activation('relu'),
-        
-        # First convolutional block
-        Conv1D(128, 3, padding='same', kernel_regularizer=regularizers.l2(1e-4)),
-        layers.BatchNormalization(),
-        Activation('relu'),
-        Dropout(0.2),
-        MaxPooling1D(pool_size=2),
-        
-        # Second convolutional block
-        Conv1D(256, 3, padding='same', kernel_regularizer=regularizers.l2(1e-4)),
-        layers.BatchNormalization(),
-        Activation('relu'),
-        Dropout(0.3),
-        MaxPooling1D(pool_size=2),
-        
-        # Third convolutional block
-        Conv1D(512, 3, padding='same', kernel_regularizer=regularizers.l2(1e-4)),
-        layers.BatchNormalization(),
-        Activation('relu'),
-        Dropout(0.4),
-        MaxPooling1D(pool_size=2),
-        
-        # Global pooling and dense layers
-        layers.GlobalAveragePooling1D(),
-        
-        Dense(256, kernel_regularizer=regularizers.l2(1e-4)),
-        layers.BatchNormalization(),
-        Activation('relu'),
-        Dropout(0.5),
-        
-        Dense(128, kernel_regularizer=regularizers.l2(1e-4)),
-        layers.BatchNormalization(),
-        Activation('relu'),
-        Dropout(0.5),
-        
-        Dense(num_classes, activation='softmax')
-    ])
+    channels = input_tensor.shape[-1]
     
-    # Use a lower initial learning rate
-    optimizer = keras.optimizers.Adam(learning_rate=0.0001)
+    # Squeeze operation (global average pooling)
+    x = tf.keras.layers.GlobalAveragePooling1D()(input_tensor)
     
-    model.compile(
-        optimizer=optimizer,
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
+    # Excitation operation (two FC layers)
+    x = Dense(channels // ratio, activation='relu')(x)
+    x = Dense(channels, activation='sigmoid')(x)
+    
+    # Reshape and multiply
+    x = tf.keras.layers.Reshape((1, channels))(x)
+    x = tf.keras.layers.multiply([input_tensor, x])
+    
+    return x
+
+def residual_block(x, filters, kernel_size=3, stride=1, use_se=True):
+    """
+    Improved residual block with optional squeeze-excitation
+    """
+    shortcut = x
+    
+    # First convolution
+    x = Conv1D(filters, kernel_size, strides=stride, padding='same')(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation('relu')(x)
+    
+    # Second convolution
+    x = Conv1D(filters, kernel_size, padding='same')(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    
+    # Squeeze and Excitation block
+    if use_se:
+        x = squeeze_excitation_block(x)
+    
+    # Handle different dimensions in shortcut
+    if stride != 1 or shortcut.shape[-1] != filters:
+        shortcut = Conv1D(filters, 1, strides=stride, padding='same')(shortcut)
+        shortcut = tf.keras.layers.BatchNormalization()(shortcut)
+    
+    # Add shortcut
+    x = tf.keras.layers.add([x, shortcut])
+    x = tf.keras.layers.Activation('relu')(x)
+    
+    return x
+
+def create_model(input_shape):
+    """
+    Create the CNN model with the same architecture as improved_cnn.py
+    """
+    model = Sequential()
+    model.add(Conv1D(256, 5, padding='same', input_shape=input_shape))
+    model.add(Activation('relu'))
+    model.add(Conv1D(128, 5, padding='same', kernel_regularizer=regularizers.l1_l2(l1=1e-5, l2=1e-4)))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.1))
+    model.add(MaxPooling1D(pool_size=(8)))
+    model.add(Conv1D(128, 5, padding='same', kernel_regularizer=regularizers.l1_l2(l1=1e-5, l2=1e-4)))
+    model.add(Activation('relu'))
+    model.add(Conv1D(128, 5, padding='same', kernel_regularizer=regularizers.l1_l2(l1=1e-5, l2=1e-4)))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+    model.add(Flatten())
+    model.add(Dense(units=8,
+                    kernel_regularizer=regularizers.l1_l2(l1=1e-5, l2=1e-4),
+                    bias_regularizer=regularizers.l2(1e-4),
+                    activity_regularizer=regularizers.l2(1e-5)
+                   ))
+    model.add(Activation('softmax'))
+    
+    # Use Adam optimizer with learning rate scheduler
+    opt = keras.optimizers.Adam(learning_rate=0.001)
+    
+    # Compile model
+    model.compile(loss='sparse_categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
     
     return model
 
@@ -562,14 +585,8 @@ def plot_confusion_matrix(y_true, y_pred, class_names):
         print(f"  {i+1}. {error_pair}: {count} instances")
 
 def main():
-    print("Validating data directory...")
-    if not validate_data_directory(data_directory):
-        print("Please check your data directory path and try again.")
-        return
-    
     print("Loading and preprocessing data...")
     
-    # Try to load saved data, if not available, process from raw files
     try:
         X = np.load("X_emotions.npy")
         y = np.load("y_emotions.npy", allow_pickle=True)
@@ -578,62 +595,47 @@ def main():
         print("Processing raw audio files...")
         X, y = load_data(save=True, augment=True)
     
-    # Check if we have enough data
-    if len(X) < 50:
-        print("Warning: Very small dataset detected. Consider adding more data or using data augmentation.")
-    
     print(f"Dataset size: {len(X)} samples")
     
-    # Encode the labels
-    print("Encoding labels...")
+    # Encode labels
     labelencoder = LabelEncoder()
     y_encoded = labelencoder.fit_transform(y)
-    
-    # Get class names and number of classes
     class_names = list(labelencoder.classes_)
     num_classes = len(class_names)
-    print(f"Classes: {class_names}")
     
-    # Check class distribution
+    # Print class distribution
     class_counts = np.bincount(y_encoded)
+    print("\nClass distribution:")
     for i, count in enumerate(class_counts):
-        print(f"Class {class_names[i]}: {count} samples")
+        print(f"{class_names[i]}: {count} samples ({count/len(y_encoded)*100:.1f}%)")
     
-    # Split data with stratification to ensure balanced classes
-    print("Splitting data into train and test sets...")
+    # Split data with stratification
     x_train, x_test, y_train, y_test = train_test_split(
         X, y_encoded, 
-        test_size=0.2,     # Use 80/20 split
-        random_state=42, 
-        stratify=y_encoded  # Ensure classes are balanced
+        test_size=0.15,
+        random_state=42,
+        stratify=y_encoded
     )
     
-    # Print dataset information
-    print(f"Training set size: {x_train.shape}")
-    print(f"Testing set size: {x_test.shape}")
-    print(f"Number of features: {x_train.shape[1]}")
-    
-    # Feature scaling for better performance
+    # Scale features
     scaler = StandardScaler()
     x_train_scaled = scaler.fit_transform(x_train)
     x_test_scaled = scaler.transform(x_test)
     
-    # Reshape data for CNN
+    # Reshape for CNN
     X_train_cnn = np.expand_dims(x_train_scaled, axis=2)
     X_test_cnn = np.expand_dims(x_test_scaled, axis=2)
     
     # Create model
-    print("Creating model...")
-    model = create_model((x_train.shape[1], 1), num_classes)
+    model = create_model((x_train.shape[1], 1))
     model.summary()
     
     # Enhanced callbacks
     early_stopping = EarlyStopping(
-        monitor='val_loss',
+        monitor='val_accuracy',
         patience=15,
         restore_best_weights=True,
-        verbose=1,
-        min_delta=0.001
+        verbose=1
     )
     
     model_checkpoint = ModelCheckpoint(
@@ -659,34 +661,37 @@ def main():
     )
     class_weight_dict = dict(enumerate(class_weights))
     
-    # Train with improved parameters
-    print("Training model...")
+    # Train with improved settings
     history = model.fit(
         X_train_cnn, y_train,
         validation_data=(X_test_cnn, y_test),
-        epochs=50,
+        epochs=20,
         batch_size=32,
         callbacks=[early_stopping, model_checkpoint, reduce_lr],
         class_weight=class_weight_dict,
         verbose=1
     )
     
-    # Load best model for evaluation
+    # Load best model
     model = keras.models.load_model('best_emotions_model.h5')
     
-    # Evaluate and plot results
+    # Evaluate and plot
     plot_training_history(history)
     
-    # Get predictions
+    # Get predictions and metrics
     y_pred = np.argmax(model.predict(X_test_cnn), axis=1)
     
-    # Print metrics
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred, target_names=class_names))
     
     # Plot confusion matrix
     plot_confusion_matrix(y_test, y_pred, class_names)
     
+    # Save the scaler for inference
+    with open('emotions_scaler.pkl', 'wb') as f:
+        pickle.dump(scaler, f)
+    
+    print("\nModel and scaler saved successfully!")
     return model, history
 
 if __name__ == "__main__":
