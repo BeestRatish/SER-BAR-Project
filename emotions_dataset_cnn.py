@@ -33,22 +33,36 @@ class FeatureConfig:
     N_FFT = 2048
 
 def load_and_preprocess_audio(file_path, sr=Config.SAMPLE_RATE, duration=Config.DURATION):
-    """Load and preprocess audio file with fixed duration."""
+    """Load and preprocess audio file with fixed duration using soundfile backend."""
     try:
-        # Load audio with specified duration
-        y, sr = librosa.load(file_path, sr=sr, duration=duration)
+        # Load audio with specified duration using soundfile backend
+        y, sr = librosa.load(file_path, sr=sr, duration=duration, res_type='kaiser_fast', backend='soundfile')
         
         # If audio is shorter than desired duration, pad with zeros
         if len(y) < Config.SAMPLES:
-            y = np.pad(y, (0, Config.SAMPLES - len(y)))
+            y = np.pad(y, (0, Config.SAMPLES - len(y)), mode='constant')
         # If audio is longer, truncate
         else:
             y = y[:Config.SAMPLES]
             
+        # Normalize audio
+        y = librosa.util.normalize(y)
+            
         return y, sr
     except Exception as e:
         print(f"Error loading {file_path}: {str(e)}")
-        return None, None
+        # Try alternative backend if soundfile fails
+        try:
+            y, sr = librosa.load(file_path, sr=sr, duration=duration, res_type='kaiser_fast', backend='audioread')
+            if len(y) < Config.SAMPLES:
+                y = np.pad(y, (0, Config.SAMPLES - len(y)), mode='constant')
+            else:
+                y = y[:Config.SAMPLES]
+            y = librosa.util.normalize(y)
+            return y, sr
+        except Exception as e2:
+            print(f"Both backends failed for {file_path}: {str(e2)}")
+            return None, None
 
 def extract_features(y, sr):
     """Extract multiple features from audio signal."""
@@ -324,4 +338,4 @@ def main():
     print("\nModel saved as 'emotions_model.h5'")
 
 if __name__ == "__main__":
-    main() 
+    main()

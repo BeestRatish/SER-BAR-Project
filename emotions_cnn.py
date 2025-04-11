@@ -665,7 +665,7 @@ def main():
     history = model.fit(
         X_train_cnn, y_train,
         validation_data=(X_test_cnn, y_test),
-        epochs=20,
+        epochs= clear,
         batch_size=32,
         callbacks=[early_stopping, model_checkpoint, reduce_lr],
         class_weight=class_weight_dict,
